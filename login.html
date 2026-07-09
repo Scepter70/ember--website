@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Log in — Ember Exchange</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="brand"><span class="dot"></span>Ember Exchange</a>
+  <span class="practice-badge"><span class="dot"></span>Practice Funds Only</span>
+</nav>
+
+<div class="auth-wrap">
+  <h1>Welcome back</h1>
+  <p class="sub">Log in to view your dashboard.</p>
+
+  <div id="msg"></div>
+
+  <form id="loginForm">
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="email" required placeholder="you@example.com">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="password" required placeholder="Your password">
+    </div>
+    <button type="submit" class="btn-primary" id="submitBtn">Log in</button>
+  </form>
+
+  <div class="auth-switch">Don't have an account? <a href="signup.html">Create one</a></div>
+</div>
+
+<script src="assets/config.js"></script>
+<script src="assets/app.js"></script>
+<script>
+  const form = document.getElementById("loginForm");
+  const msg = document.getElementById("msg");
+  const btn = document.getElementById("submitBtn");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    msg.innerHTML = "";
+    btn.disabled = true;
+    btn.textContent = "Logging in...";
+
+    const email = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+
+    const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+
+    if (error) {
+      msg.innerHTML = `<div class="msg error">${error.message}</div>`;
+      btn.disabled = false;
+      btn.textContent = "Log in";
+      return;
+    }
+
+    window.location.href = "dashboard.html";
+  });
+</script>
+
+</body>
+</html>

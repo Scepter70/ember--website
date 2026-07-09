@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Ember Exchange</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="brand"><span class="dot"></span>Ember Exchange</a>
+  <div class="nav-right">
+    <span class="practice-badge"><span class="dot"></span>Admin Panel</span>
+    <a href="dashboard.html" class="nav-link">My dashboard</a>
+    <a href="#" class="nav-link" id="logoutBtn">Log out</a>
+  </div>
+</nav>
+
+<div class="wrap page">
+  <div id="notAdmin" style="display:none;">
+    <div class="card">
+      <h3>Access denied</h3>
+      <p class="stat-sub" style="margin-top:8px;">Your account doesn't have admin access. See the README for how to grant yourself the admin role in Supabase.</p>
+    </div>
+  </div>
+
+  <div id="adminContent" style="display:none;">
+    <div class="grid-2">
+      <div class="card">
+        <h3 style="margin-bottom:18px; font-size:19px;">Adjust a user's balance</h3>
+        <div id="adjMsg"></div>
+        <div class="field">
+          <label>User email</label>
+          <input type="email" id="targetEmail" placeholder="user@example.com">
+        </div>
+        <div class="field">
+          <label>Asset</label>
+          <select id="adjAsset">
+            <option value="USD">USD (cash)</option>
+            <option value="BTC">BTC</option>
+            <option value="ETH">ETH</option>
+            <option value="SOL">SOL</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Amount (use negative to debit, e.g. -50)</label>
+          <input type="number" id="adjAmount" placeholder="100" step="any">
+        </div>
+        <div class="field">
+          <label>Note</label>
+          <input type="text" id="adjNote" placeholder="Reason for adjustment">
+        </div>
+        <button class="btn-primary" id="adjustBtn">Apply adjustment</button>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:18px; font-size:19px;">All users</h3>
+        <table>
+          <thead><tr><th>Username</th><th>Role</th><th>Joined</th></tr></thead>
+          <tbody id="usersTable"><tr><td colspan="3" class="stat-sub">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-bottom:18px; font-size:19px;">All transactions</h3>
+      <table>
+        <thead><tr><th>User</th><th>Type</th><th>Asset</th><th>Amount</th><th>Note</th><th>Date</th></tr></thead>
+        <tbody id="allTxTable"><tr><td colspan="6" class="stat-sub">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="assets/config.js"></script>
+<script src="assets/app.js"></script>
+<script>
+async function loadAdmin() {
+  const { data: { user } } = await supabaseClient.auth.getUser();
+  if (!user) { window.location.href = "login.html"; return; }
+
+  const profile = await getProfile(user.id);
+  if (profile?.role !== "admin") {
+    document.getElementById("notAdmin").style.display = "block";
+    return;
+  }
+  document.getElementById("adminContent").style.display = "block";
+
+  const { data: profiles } = await supabaseClient.from("profiles").select("*").order("created_at", { ascending: false });
+  const usersTable = document.getElementById("usersTable");
+  usersTable.innerHTML = "";
+  (profiles ?? []).forEach(p => {
+    usersTable.innerHTML += `
+      <tr>
+        <td>${p.username}</td>
+        <td><span class="badge ${p.role === 'admin' ? 'admin_credit' : ''}">${p.role}</span></td>
+        <td class="stat-sub">${new Date(p.created_at).toLocaleDateString()}</td>
+      </tr>`;
+  });
+
+  const { data: txs } = await supabaseClient
+    .from("transactions").select("*, profiles(username)")
+    .order("created_at", { ascending: false }).limit(50);
+  const allTxTable = document.getElementById("allTxTable");
+  allTxTable.innerHTML = "";
+  if (!txs || txs.length === 0) {
+    allTxTable.innerHTML = `<tr><td colspan="6" class="stat-sub">No transactions yet.</td></tr>`;
+  } else {
+    txs.forEach(tx => {
+      allTxTable.innerHTML += `
+        <tr>
+          <td>${tx.profiles?.username ?? tx.user_id}</td>
+          <td><span class="badge ${tx.type}">${tx.type.replace("_"," ")}</span></td>
+          <td>${tx.asset}</td>
+          <td>${formatQty(tx.amount)}</td>
+          <td class="stat-sub">${tx.note ?? "—"}</td>
+          <td class="stat-sub">${new Date(tx.created_at).toLocaleString()}</td>
+        </tr>`;
+    });
+  }
+}
+
+document.getElementById("adjustBtn").addEventListener("click", async () => {
+  const msg = document.getElementById("adjMsg");
+  msg.innerHTML = "";
+  const email = document.getElementById("targetEmail").value.trim();
+  const asset = document.getElementById("adjAsset").value;
+  const amount = parseFloat(document.getElementById("adjAmount").value);
+  const note = document.getElementById("adjNote").value.trim() || null;
+
+  if (!email || !amount) {
+    msg.innerHTML = `<div class="msg error">Enter a user email and a non-zero amount.</div>`;
+    return;
+  }
+
+  // Look up the target user's internal ID by email via a secure admin-only function.
+  const { data: targetId, error: lookupErr } = await supabaseClient
+    .rpc("admin_lookup_user_id", { p_email: email });
+
+  if (lookupErr || !targetId) {
+    msg.innerHTML = `<div class="msg error">No user found with that email.</div>`;
+    return;
+  }
+
+  const { error } = await supabaseClient.rpc("admin_adjust_balance", {
+    p_target_user: targetId, p_asset: asset, p_delta: amount, p_note: note
+  });
+
+  if (error) {
+    msg.innerHTML = `<div class="msg error">${error.message}</div>`;
+    return;
+  }
+
+  msg.innerHTML = `<div class="msg success">Applied ${amount > 0 ? "+" : ""}${amount} ${asset} to ${email}.</div>`;
+  document.getElementById("targetEmail").value = "";
+  document.getElementById("adjAmount").value = "";
+  document.getElementById("adjNote").value = "";
+  await loadAdmin();
+});
+
+document.getElementById("logoutBtn").addEventListener("click", (e) => { e.preventDefault(); signOut(); });
+
+(async () => { await requireAuth(); await loadAdmin(); })();
+</script>
+
+</body>
+</html>

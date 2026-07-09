@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — Ember Exchange</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="brand"><span class="dot"></span>Ember Exchange</a>
+  <div class="nav-right">
+    <span class="practice-badge"><span class="dot"></span>Practice Funds Only</span>
+    <span class="nav-link" id="usernameLabel"></span>
+    <a href="admin.html" class="nav-link" id="adminLink" style="display:none;">Admin</a>
+    <a href="#" class="nav-link" id="logoutBtn">Log out</a>
+  </div>
+</nav>
+
+<div class="wrap page">
+
+  <div class="grid-3" style="margin-bottom:20px;">
+    <div class="card">
+      <div class="stat-label">Portfolio value</div>
+      <div class="stat-value" id="portfolioValue">—</div>
+      <div class="stat-sub">Cash + holdings, valued at live prices</div>
+    </div>
+    <div class="card">
+      <div class="stat-label">Cash balance</div>
+      <div class="stat-value" id="cashBalance">—</div>
+      <div class="stat-sub">Practice USD</div>
+    </div>
+    <div class="card">
+      <div class="stat-label">Holdings value</div>
+      <div class="stat-value" id="holdingsValue">—</div>
+      <div class="stat-sub" id="holdingsCount">—</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div>
+      <div class="card">
+        <h3 style="margin-bottom:18px; font-size:19px;">Holdings</h3>
+        <div id="holdingsList"><div class="stat-sub">Loading...</div></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:18px; font-size:19px;">Transaction history</h3>
+        <table>
+          <thead><tr><th>Type</th><th>Asset</th><th>Amount</th><th>Price</th><th>Date</th></tr></thead>
+          <tbody id="txTable"><tr><td colspan="5" class="stat-sub">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="align-self:start;">
+      <h3 style="margin-bottom:18px; font-size:19px;">Trade</h3>
+      <div class="tabs">
+        <div class="tab active" data-side="buy" id="tabBuy">Buy</div>
+        <div class="tab" data-side="sell" id="tabSell">Sell</div>
+      </div>
+      <div id="tradeMsg"></div>
+      <div class="field">
+        <label>Asset</label>
+        <select id="assetSelect">
+          <option value="BTC">Bitcoin (BTC)</option>
+          <option value="ETH">Ethereum (ETH)</option>
+          <option value="SOL">Solana (SOL)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Amount (USD)</label>
+        <input type="number" id="usdAmount" placeholder="100" min="1" step="0.01">
+      </div>
+      <div class="stat-sub" id="priceInfo" style="margin-bottom:16px;">Fetching live price...</div>
+      <button class="btn-primary btn-buy" id="tradeBtn">Buy</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">Ember Exchange is a student project. All balances are practice funds with no real-world value.</div>
+</footer>
+
+<script src="assets/config.js"></script>
+<script src="assets/app.js"></script>
+<script>
+let currentUser = null;
+let currentSide = "buy";
+let livePrices = {}; // { BTC: 65000, ETH: 3400, SOL: 150 }
+
+const COINGECKO_IDS = { BTC: "bitcoin", ETH: "ethereum", SOL: "solana" };
+
+async function fetchPrices() {
+  try {
+    const ids = Object.values(COINGECKO_IDS).join(",");
+    const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`);
+    const data = await res.json();
+    livePrices = {
+      BTC: data.bitcoin?.usd ?? 0,
+      ETH: data.ethereum?.usd ?? 0,
+      SOL: data.solana?.usd ?? 0,
+    };
+  } catch (e) {
+    console.error("Price fetch failed", e);
+  }
+  updatePriceInfo();
+  await loadDashboard();
+}
+
+function updatePriceInfo() {
+  const asset = document.getElementById("assetSelect").value;
+  const price = livePrices[asset];
+  document.getElementById("priceInfo").textContent = price
+    ? `Live price: ${formatUSD(price)} per ${asset}`
+    : "Price unavailable";
+}
+
+async function loadDashboard() {
+  const { data: { user } } = await supabaseClient.auth.getUser();
+  if (!user) { window.location.href = "login.html"; return; }
+  currentUser = user;
+
+  const profile = await getProfile(user.id);
+  document.getElementById("usernameLabel").textContent = profile?.username ?? user.email;
+  if (profile?.role === "admin") document.getElementById("adminLink").style.display = "inline";
+
+  const { data: wallets } = await supabaseClient.from("wallets").select("*").eq("user_id", user.id);
+  const cash = wallets?.find(w => w.asset === "USD")?.amount ?? 0;
+  const holdings = (wallets ?? []).filter(w => w.asset !== "USD" && w.amount > 0);
+
+  let holdingsValue = 0;
+  const holdingsList = document.getElementById("holdingsList");
+  holdingsList.innerHTML = "";
+  if (holdings.length === 0) {
+    holdingsList.innerHTML = `<div class="stat-sub">No holdings yet — make your first trade.</div>`;
+  }
+  holdings.forEach(h => {
+    const price = livePrices[h.asset] ?? 0;
+    const value = price * h.amount;
+    holdingsValue += value;
+    holdingsList.innerHTML += `
+      <div class="holding-row">
+        <div class="holding-left">
+          <div class="asset-icon">${h.asset}</div>
+          <div>
+            <div>${h.asset}</div>
+            <div class="stat-sub">${formatQty(h.amount)} ${h.asset}</div>
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <div>${formatUSD(value)}</div>
+          <div class="stat-sub">${formatUSD(price)} / ${h.asset}</div>
+        </div>
+      </div>`;
+  });
+
+  document.getElementById("cashBalance").textContent = formatUSD(cash);
+  document.getElementById("holdingsValue").textContent = formatUSD(holdingsValue);
+  document.getElementById("holdingsCount").textContent = `${holdings.length} asset${holdings.length === 1 ? "" : "s"}`;
+  document.getElementById("portfolioValue").textContent = formatUSD(cash + holdingsValue);
+
+  const { data: txs } = await supabaseClient
+    .from("transactions").select("*").eq("user_id", user.id)
+    .order("created_at", { ascending: false }).limit(20);
+
+  const txTable = document.getElementById("txTable");
+  txTable.innerHTML = "";
+  if (!txs || txs.length === 0) {
+    txTable.innerHTML = `<tr><td colspan="5" class="stat-sub">No transactions yet.</td></tr>`;
+  } else {
+    txs.forEach(tx => {
+      txTable.innerHTML += `
+        <tr>
+          <td><span class="badge ${tx.type}">${tx.type.replace("_"," ")}</span></td>
+          <td>${tx.asset}</td>
+          <td>${formatQty(tx.amount)}</td>
+          <td>${tx.price_usd ? formatUSD(tx.price_usd) : "—"}</td>
+          <td class="stat-sub">${new Date(tx.created_at).toLocaleString()}</td>
+        </tr>`;
+    });
+  }
+}
+
+document.getElementById("assetSelect").addEventListener("change", updatePriceInfo);
+
+document.getElementById("tabBuy").addEventListener("click", () => setSide("buy"));
+document.getElementById("tabSell").addEventListener("click", () => setSide("sell"));
+function setSide(side) {
+  currentSide = side;
+  document.getElementById("tabBuy").classList.toggle("active", side === "buy");
+  document.getElementById("tabSell").classList.toggle("active", side === "sell");
+  const btn = document.getElementById("tradeBtn");
+  btn.textContent = side === "buy" ? "Buy" : "Sell";
+  btn.className = "btn-primary " + (side === "buy" ? "btn-buy" : "btn-sell");
+}
+
+document.getElementById("tradeBtn").addEventListener("click", async () => {
+  const msg = document.getElementById("tradeMsg");
+  msg.innerHTML = "";
+  const asset = document.getElementById("assetSelect").value;
+  const usdAmount = parseFloat(document.getElementById("usdAmount").value);
+  const price = livePrices[asset];
+
+  if (!usdAmount || usdAmount <= 0) {
+    msg.innerHTML = `<div class="msg error">Enter a valid USD amount.</div>`;
+    return;
+  }
+  if (!price) {
+    msg.innerHTML = `<div class="msg error">Live price unavailable, try again shortly.</div>`;
+    return;
+  }
+
+  const qty = usdAmount / price;
+  const { error } = await supabaseClient.rpc("execute_trade", {
+    p_asset: asset, p_side: currentSide, p_qty: qty, p_price_usd: price
+  });
+
+  if (error) {
+    msg.innerHTML = `<div class="msg error">${error.message}</div>`;
+    return;
+  }
+
+  msg.innerHTML = `<div class="msg success">${currentSide === "buy" ? "Bought" : "Sold"} ${formatQty(qty)} ${asset}.</div>`;
+  document.getElementById("usdAmount").value = "";
+  await loadDashboard();
+});
+
+document.getElementById("logoutBtn").addEventListener("click", (e) => { e.preventDefault(); signOut(); });
+
+(async () => {
+  await requireAuth();
+  await fetchPrices();
+  setInterval(fetchPrices, 30000); // refresh live prices every 30s
+})();
+</script>
+
+</body>
+</html>
